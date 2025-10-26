@@ -81,12 +81,12 @@ show_legend = input(true, 'Afficher Légende', group='📋 Dashboard')
 // Timezone (système LuxAlgo)
 var string tz = use_exchange_tz ? syminfo.timezone : str.format('UTC{0}{1}', tz_offset >= 0 ? '+' : '-', math.abs(tz_offset))
 
-// Sessions actives (détection LuxAlgo)
-is_nya = math.sign(nz(time(timeframe.period, nya_time, tz)))
-is_ldn = math.sign(nz(time(timeframe.period, ldn_time, tz)))
-is_tyo = math.sign(nz(time(timeframe.period, tyo_time, tz)))
-is_london_kz = math.sign(nz(time(timeframe.period, london_kz_time, tz)))
-is_ny_kz = math.sign(nz(time(timeframe.period, ny_kz_time, tz)))
+// Sessions actives (détection LuxAlgo - convertie en bool)
+is_nya = not na(time(timeframe.period, nya_time, tz))
+is_ldn = not na(time(timeframe.period, ldn_time, tz))
+is_tyo = not na(time(timeframe.period, tyo_time, tz))
+is_london_kz = not na(time(timeframe.period, london_kz_time, tz))
+is_ny_kz = not na(time(timeframe.period, ny_kz_time, tz))
 
 // Boxes et lines pour affichage
 var box box_nya = na
