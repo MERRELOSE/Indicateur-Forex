@@ -236,26 +236,15 @@ if show_fvg_boxes and fvg_bearish
 // SMART MONEY : SWING HIGH / LOW
 // ============================================================================
 
-// Détection Swing High (plus haut local)
-f_is_swing_high(int lookback) =>
-    bool result = true
-    for i = 1 to lookback
-        if high[i] > high or high[-i] >= high
-            result := false
-            break
-    result
+// Utilisation des fonctions natives Pine Script pour Swing detection
+// ta.pivothigh() retourne le prix du pivot si détecté, sinon na
+// ta.pivotlow() retourne le prix du pivot si détecté, sinon na
 
-// Détection Swing Low (plus bas local)
-f_is_swing_low(int lookback) =>
-    bool result = true
-    for i = 1 to lookback
-        if low[i] < low or low[-i] <= low
-            result := false
-            break
-    result
+float swing_high_price = enable_swing_filter ? ta.pivothigh(high, swing_lookback, swing_lookback) : na
+float swing_low_price = enable_swing_filter ? ta.pivotlow(low, swing_lookback, swing_lookback) : na
 
-bool is_swing_high = enable_swing_filter and f_is_swing_high(swing_lookback)
-bool is_swing_low = enable_swing_filter and f_is_swing_low(swing_lookback)
+bool is_swing_high = not na(swing_high_price)
+bool is_swing_low = not na(swing_low_price)
 
 // Stocker swing points récents
 var float[] swing_highs = array.new_float(0)
@@ -264,15 +253,15 @@ var float[] swing_lows = array.new_float(0)
 var int[] swing_low_bars = array.new_int(0)
 
 if is_swing_high
-    array.push(swing_highs, high)
-    array.push(swing_high_bars, bar_index)
+    array.push(swing_highs, swing_high_price)
+    array.push(swing_high_bars, bar_index - swing_lookback)  // Le pivot était N barres en arrière
     if array.size(swing_highs) > 10
         array.shift(swing_highs)
         array.shift(swing_high_bars)
 
 if is_swing_low
-    array.push(swing_lows, low)
-    array.push(swing_low_bars, bar_index)
+    array.push(swing_lows, swing_low_price)
+    array.push(swing_low_bars, bar_index - swing_lookback)  // Le pivot était N barres en arrière
     if array.size(swing_lows) > 10
         array.shift(swing_lows)
         array.shift(swing_low_bars)
@@ -298,16 +287,16 @@ f_near_swing_high() =>
                 break
     result
 
-// Affichage Swing Points
+// Affichage Swing Points (au niveau du pivot historique)
 if show_swing_labels and is_swing_high
-    label.new(bar_index, high, 'SH',
+    label.new(bar_index - swing_lookback, swing_high_price, 'SH',
       color = color.new(color.red, 30),
       textcolor = color.white,
       style = label.style_label_down,
       size = size.tiny)
 
 if show_swing_labels and is_swing_low
-    label.new(bar_index, low, 'SL',
+    label.new(bar_index - swing_lookback, swing_low_price, 'SL',
       color = color.new(color.green, 30),
       textcolor = color.white,
       style = label.style_label_up,
