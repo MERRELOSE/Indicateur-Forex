@@ -37,6 +37,7 @@ london_kz_color = input.color(color.red, 'Couleur London KZ', group='🎯 Kill Z
 ny_kz_color = input.color(color.blue, 'Couleur NY KZ', group='🎯 Kill Zones')
 
 // === FILTRES SMART MONEY ===
+enable_trend_strict = input(true, '📈 TENDANCE (strict)', group='🧠 Smart Money Filters', tooltip='OBLIGATOIRE: Trade avec la tendance EMA50/200')
 enable_fvg_filter = input(true, '⚡ Fair Value Gaps (FVG)', group='🧠 Smart Money Filters', tooltip='Détecter les imbalances')
 enable_swing_filter = input(true, '📊 Swing High/Low', group='🧠 Smart Money Filters', tooltip='Structure de marché')
 enable_reaction_zones = input(true, '🎯 Zones de Réaction', group='🧠 Smart Money Filters', tooltip='Support/Résistance testés')
@@ -66,6 +67,8 @@ enable_killzone_entries = input(true, '🎯 Kill Zone Entries', group='📈 Stra
 show_vwap = input(true, 'VWAP Daily', group='📊 Indicateurs')
 show_ema = input(true, 'EMA9', group='📊 Indicateurs')
 ema_period = input.int(9, 'Période EMA', minval=1, group='📊 Indicateurs')
+show_ema50 = input(true, 'EMA50 (Tendance)', group='📊 Indicateurs', tooltip='Pour identifier la tendance principale')
+show_ema200 = input(true, 'EMA200 (Tendance long terme)', group='📊 Indicateurs')
 
 // === RISK MANAGEMENT ===
 atr_period = input.int(14, 'Période ATR', minval=1, group='⚠️ Risk Management')
@@ -129,9 +132,31 @@ atr_sl_short = close + (atr * atr_sl_mult)
 
 vwap = ta.vwap(close)
 ema9 = ta.ema(close, ema_period)
+ema50 = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
 
 vol_ma = ta.sma(volume, 20)
 high_volume = volume > vol_ma
+
+// ============================================================================
+// DÉTECTION DE TENDANCE (LA BASE DU TRADING)
+// ============================================================================
+
+// Tendance principale basée sur EMA50/200
+bool strong_uptrend = close > ema50 and ema50 > ema200 and close > ema9
+bool strong_downtrend = close < ema50 and ema50 < ema200 and close < ema9
+
+// Tendance modérée
+bool uptrend = close > ema50 and close > ema9
+bool downtrend = close < ema50 and close < ema9
+
+// Zone de range (sideways)
+bool in_range = not uptrend and not downtrend
+
+// Tendance confirmée par pente EMA50
+float ema50_slope = ema50 - ema50[5]
+bool ema50_rising = ema50_slope > 0
+bool ema50_falling = ema50_slope < 0
 
 // ============================================================================
 // SMART MONEY : FAIR VALUE GAPS (FVG)
@@ -395,19 +420,54 @@ bool good_position_short = enable_range_position and position_in_range > 70
 // ============================================================================
 
 f_calculate_quality_score(bool is_long, bool is_with_trend, bool is_high_vol, float dist_vwap, bool in_kz) =>
-    float score = 40.0  // Base réduite à 40
+    float score = 30.0  // Base
 
-    // Critères de base (30 points max)
-    if is_with_trend
-        score += 10  // Réduit de 20 à 10
+    // ========================================
+    // TENDANCE (LA BASE) : 25 points max
+    // ========================================
+
+    // LONG dans forte tendance haussière
+    if is_long and strong_uptrend
+        score += 25  // MAXIMUM
+    // LONG dans tendance haussière modérée
+    else if is_long and uptrend and ema50_rising
+        score += 18
+    else if is_long and uptrend
+        score += 12
+    // SHORT dans forte tendance baissière
+    else if not is_long and strong_downtrend
+        score += 25  // MAXIMUM
+    // SHORT dans tendance baissière modérée
+    else if not is_long and downtrend and ema50_falling
+        score += 18
+    else if not is_long and downtrend
+        score += 12
+    // Signal CONTRE-TENDANCE (pénalité)
+    else if is_long and downtrend
+        score -= 20  // GROSSE PÉNALITÉ
+    else if not is_long and uptrend
+        score -= 20  // GROSSE PÉNALITÉ
+    // Range (neutre)
+    else
+        score += 5  // Range = prudence
+
+    // Si filtre tendance strict activé et signal contre-tendance
+    if enable_trend_strict
+        if (is_long and downtrend) or (not is_long and uptrend)
+            score := 0  // REJET TOTAL
+
+    // ========================================
+    // Autres critères de base (15 points)
+    // ========================================
+
     if is_high_vol
-        score += 10  // Réduit de 15 à 10
+        score += 8
 
     float vwap_dist_pct = math.abs(dist_vwap / close) * 100
     if vwap_dist_pct < 0.1
-        score += 5
+        score += 4
     else if vwap_dist_pct < 0.3
-        score += 3
+        score += 2
 
     if in_kz
         score += 5
@@ -651,6 +711,20 @@ f_create_signal_label(bool is_long, string strategy, float entry, float sl, floa
 
     // Ajouter badges selon filtres actifs
     string badges = ''
+
+    // BADGE TENDANCE (prioritaire)
+    if is_long
+        if strong_uptrend
+            badges += '📈STRONG '
+        else if uptrend
+            badges += '📈TREND '
+    else
+        if strong_downtrend
+            badges += '📉STRONG '
+        else if downtrend
+            badges += '📉TREND '
+
+    // Autres badges
     if is_long
         badges += f_near_fvg_bullish() ? '⚡FVG ' : ''
         badges += f_near_swing_low() ? '📊SL ' : ''
@@ -662,7 +736,7 @@ f_create_signal_label(bool is_long, string strategy, float entry, float sl, floa
 
     badges += f_at_reaction_zone(reaction_zone_touches) ? '🎯RZ ' : ''
 
-    string text = direction + ' ' + strategy + '\n' +
+    string label_text = direction + ' ' + strategy + '\n' +
       (badges != '' ? badges + '\n━━━━━━━━\n' : '━━━━━━━━\n') +
       '💰 ' + str.tostring(entry, format.mintick) + '\n' +
       '🛡️ ' + str.tostring(sl, format.mintick) + '\n' +
@@ -671,7 +745,7 @@ f_create_signal_label(bool is_long, string strategy, float entry, float sl, floa
       '✅ ' + str.tostring(quality, '#') + '%' +
       (extra_info != '' ? '\n' + extra_info : '')
 
-    text
+    label_text
 
 // Asian Breakout
 if breakout_long and breakout_quality >= min_signal_quality
@@ -679,8 +753,8 @@ if breakout_long and breakout_quality >= min_signal_quality
     float sl = asian_low
     float tp = asian_high + ((asian_high - asian_low) * default_rr)
 
-    string text = f_create_signal_label(true, 'ASIAN BO', entry, sl, tp, breakout_quality, '')
-    label.new(bar_index, low, text,
+    string signal_text = f_create_signal_label(true, 'ASIAN BO', entry, sl, tp, breakout_quality, '')
+    label.new(bar_index, low, signal_text,
       color = color.new(color.green, 0),
       textcolor = color.white,
       style = label.style_label_up,
@@ -691,8 +765,8 @@ if breakout_short and breakout_quality >= min_signal_quality
     float sl = asian_high
     float tp = asian_low - ((asian_high - asian_low) * default_rr)
 
-    string text = f_create_signal_label(false, 'ASIAN BO', entry, sl, tp, breakout_quality, '')
-    label.new(bar_index, high, text,
+    string signal_text = f_create_signal_label(false, 'ASIAN BO', entry, sl, tp, breakout_quality, '')
+    label.new(bar_index, high, signal_text,
       color = color.new(color.red, 0),
       textcolor = color.white,
       style = label.style_label_down,
@@ -704,8 +778,8 @@ if vwap_long and vwap_quality >= min_signal_quality
     float sl = atr_sl_long
     float tp = entry + ((entry - sl) * default_rr)
 
-    string text = f_create_signal_label(true, 'VWAP', entry, sl, tp, vwap_quality, '')
-    label.new(bar_index, low, text,
+    string signal_text = f_create_signal_label(true, 'VWAP', entry, sl, tp, vwap_quality, '')
+    label.new(bar_index, low, signal_text,
       color = color.new(color.lime, 20),
       textcolor = color.black,
       style = label.style_label_up,
@@ -716,8 +790,8 @@ if vwap_short and vwap_quality >= min_signal_quality
     float sl = atr_sl_short
     float tp = entry - ((sl - entry) * default_rr)
 
-    string text = f_create_signal_label(false, 'VWAP', entry, sl, tp, vwap_quality, '')
-    label.new(bar_index, high, text,
+    string signal_text = f_create_signal_label(false, 'VWAP', entry, sl, tp, vwap_quality, '')
+    label.new(bar_index, high, signal_text,
       color = color.new(color.orange, 20),
       textcolor = color.black,
       style = label.style_label_down,
@@ -729,8 +803,8 @@ if kz_long and kz_quality >= min_signal_quality
     float sl = atr_sl_long
     float tp = entry + ((entry - sl) * default_rr)
 
-    string text = f_create_signal_label(true, kz_name, entry, sl, tp, kz_quality, '')
-    label.new(bar_index, low, text,
+    string signal_text = f_create_signal_label(true, kz_name, entry, sl, tp, kz_quality, '')
+    label.new(bar_index, low, signal_text,
       color = color.new(color.blue, 20),
       textcolor = color.white,
       style = label.style_label_up,
@@ -741,8 +815,8 @@ if kz_short and kz_quality >= min_signal_quality
     float sl = atr_sl_short
     float tp = entry - ((sl - entry) * default_rr)
 
-    string text = f_create_signal_label(false, kz_name, entry, sl, tp, kz_quality, '')
-    label.new(bar_index, high, text,
+    string signal_text = f_create_signal_label(false, kz_name, entry, sl, tp, kz_quality, '')
+    label.new(bar_index, high, signal_text,
       color = color.new(color.purple, 20),
       textcolor = color.white,
       style = label.style_label_down,
@@ -754,13 +828,15 @@ if kz_short and kz_quality >= min_signal_quality
 
 plot(show_vwap ? vwap : na, 'VWAP', color.yellow, 2)
 plot(show_ema ? ema9 : na, 'EMA9', color.aqua, 1)
+plot(show_ema50 ? ema50 : na, 'EMA50 Trend', color.orange, 2)
+plot(show_ema200 ? ema200 : na, 'EMA200 Trend', color.red, 2)
 
 // ============================================================================
 // DASHBOARD
 // ============================================================================
 
 if show_dashboard and barstate.islast
-    var table dash = table.new(position.top_right, 2, 12,
+    var table dash = table.new(position.top_right, 2, 13,
       bgcolor = color.new(#1a1a1a, 10),
       border_color = color.gray,
       border_width = 1)
@@ -782,40 +858,50 @@ if show_dashboard and barstate.islast
     table.cell(dash, 0, 3, 'Position', text_color = color.white, text_size = size.small)
     table.cell(dash, 1, 3, vwap_pos, text_color = close > vwap ? color.green : color.red, text_size = size.small)
 
+    // TENDANCE (LA BASE)
+    string trend_status = strong_uptrend ? '📈 STRONG UP' :
+                         strong_downtrend ? '📉 STRONG DOWN' :
+                         uptrend ? '📈 UP' :
+                         downtrend ? '📉 DOWN' : '↔️ RANGE'
+    color trend_color = strong_uptrend or uptrend ? color.green :
+                       strong_downtrend or downtrend ? color.red : color.gray
+    table.cell(dash, 0, 4, '📈 TENDANCE', text_color = color.white, text_size = size.small, bgcolor = color.new(color.blue, 70))
+    table.cell(dash, 1, 4, trend_status, text_color = trend_color, text_size = size.small, bgcolor = color.new(trend_color, 85))
+
     // Smart Money Filters
-    table.cell(dash, 0, 4, '🧠 SMART FILTERS', text_color = color.white, text_size = size.small, bgcolor = color.new(color.purple, 70))
-    table.merge_cells(dash, 0, 4, 1, 4)
+    table.cell(dash, 0, 5, '🧠 SMART FILTERS', text_color = color.white, text_size = size.small, bgcolor = color.new(color.purple, 70))
+    table.merge_cells(dash, 0, 5, 1, 5)
 
     string fvg_status = f_near_fvg_bullish() ? '⚡BULL' : f_near_fvg_bearish() ? '⚡BEAR' : '⚪OFF'
-    table.cell(dash, 0, 5, 'FVG', text_color = color.white, text_size = size.tiny)
-    table.cell(dash, 1, 5, fvg_status, text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 0, 6, 'FVG', text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 1, 6, fvg_status, text_color = color.white, text_size = size.tiny)
 
     string swing_status = f_near_swing_low() ? '📊 LOW' : f_near_swing_high() ? '📊 HIGH' : '⚪OFF'
-    table.cell(dash, 0, 6, 'Swing', text_color = color.white, text_size = size.tiny)
-    table.cell(dash, 1, 6, swing_status, text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 0, 7, 'Swing', text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 1, 7, swing_status, text_color = color.white, text_size = size.tiny)
 
     string rz_status = f_at_reaction_zone(reaction_zone_touches) ? '🎯 YES' : '⚪ NO'
-    table.cell(dash, 0, 7, 'React Zone', text_color = color.white, text_size = size.tiny)
-    table.cell(dash, 1, 7, rz_status, text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 0, 8, 'React Zone', text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 1, 8, rz_status, text_color = color.white, text_size = size.tiny)
 
     string candle_status = bullish_engulfing or bearish_engulfing ? '🕯️ENG' :
                           bullish_pinbar or bearish_pinbar ? '🕯️PIN' : '⚪OFF'
-    table.cell(dash, 0, 8, 'Pattern', text_color = color.white, text_size = size.tiny)
-    table.cell(dash, 1, 8, candle_status, text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 0, 9, 'Pattern', text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 1, 9, candle_status, text_color = color.white, text_size = size.tiny)
 
     string range_status = str.tostring(position_in_range, '#') + '%'
     color range_col = good_position_long ? color.green : good_position_short ? color.red : color.gray
-    table.cell(dash, 0, 9, 'Range Pos', text_color = color.white, text_size = size.tiny)
-    table.cell(dash, 1, 9, range_status, text_color = range_col, text_size = size.tiny)
+    table.cell(dash, 0, 10, 'Range Pos', text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 1, 10, range_status, text_color = range_col, text_size = size.tiny)
 
     // Session
     string session = is_london_kz ? '🎯 LONDON' : is_ny_kz ? '🎯 NY' :
                     is_ldn ? '🇬🇧 LDN' : is_nya ? '🇺🇸 NY' : is_tyo ? '🇯🇵 TYO' : '💤'
-    table.cell(dash, 0, 10, 'Session', text_color = color.white, text_size = size.small)
-    table.cell(dash, 1, 10, session, text_color = color.white, text_size = size.tiny)
+    table.cell(dash, 0, 11, 'Session', text_color = color.white, text_size = size.small)
+    table.cell(dash, 1, 11, session, text_color = color.white, text_size = size.tiny)
 
-    table.cell(dash, 0, 11, '💡 TIP', text_color = color.white, text_size = size.tiny, bgcolor = color.new(color.orange, 70))
-    table.cell(dash, 1, 11, 'Wait 80%+', text_color = color.white, text_size = size.tiny, bgcolor = color.new(color.orange, 70))
+    table.cell(dash, 0, 12, '💡 TIP', text_color = color.white, text_size = size.tiny, bgcolor = color.new(color.orange, 70))
+    table.cell(dash, 1, 12, 'Trade avec trend!', text_color = color.white, text_size = size.tiny, bgcolor = color.new(color.orange, 70))
 
 // ============================================================================
 // LÉGENDE
